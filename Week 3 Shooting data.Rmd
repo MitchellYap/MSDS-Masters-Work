@@ -1,0 +1,220 @@
+---
+title: "Week 3 Data Analysis Report on Temporal Patterns in NYC Shooting Data"
+author: "Mitchell"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Executive Summary
+This report analyses shooting incidents in New York (NY), using information provided publicly by the NY Police Department. The obective of the analysis was to identify temporal patterns in shootings, and assess trends over time. Two primary analyses were conducted: a time-based breakdown of incidents and an examination of changes in shooting frequency over the years. Key findings include that shootings occur more frequently at night, that shootings happen most frequently between Q2 - Q3, show a slight decreasing trend of shootings in the last decade, and that a linear model is unsuitable for predictions.
+
+```{r import tidyverse}
+library(tidyverse)
+```
+
+# 2. Data Source
+
+The data is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. The data within was last updated on April 2024, and was sourced from the NYC Open Data platform.
+
+```{r get shooting data}
+data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+#3. Data Cleaning
+
+Summary statistics revealed several columns with a significant number of missing values, including location details and perpetrator attributes.
+
+```{r summarise data}
+summary(data)
+
+data %>% 
+  summarise(across(everything(),~sum(is.na(.)))) %>% 
+  glimpse()
+
+```
+
+Columns with excessive missing data were removed, such as:
+- LOC_OF_OCCUR_DESC
+- LOC_CLASSFCTN_DESC
+- LOCATION_DESC
+
+Irrelevant fields were also excluded, namely:
+- Latitude
+- Longitude
+- X_COORD_CD
+- Y_COORD_CD
+- STATISTICAL_MURDER_FLAG
+
+The OCCUR_DATE column was converted to a date format for analysis.
+
+```{r dropping extra columns}
+data_cleaned <- data %>%
+  select(INCIDENT_KEY:VIC_RACE) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  select(-c(LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, STATISTICAL_MURDER_FLAG, LOCATION_DESC))
+```
+
+The cleaned dataset retained the following columns
+1. INCIDENT_KEY
+2. OCCUR_DATE
+3. OCCUR_TIME
+4. BORO
+5. PERP_AGE_GROUP
+6. PERP_SEX
+7. PERP_RACE
+8. VIC_AGE_GROUP
+9. VIC_SEX
+10. VIC_RACE.
+
+# 4. Analysis 1 - A Time-Based Breakdown of Shootings
+
+This analysis seeks to determine if shootings were more likely at a specific time of the day.
+
+```{r analysis on time of murders}
+#convert time to hour of day
+data_cleaned <- data_cleaned %>%
+  mutate(hour = hour(OCCUR_TIME))
+
+#Distribution analysis
+time_dist <- data_cleaned %>%
+  group_by(hour) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count))
+
+print(time_dist,n = Inf)
+
+ggplot(data_cleaned, aes(x=hour)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black") +
+  labs(title = "Distribution of Murders by Hour of Day",
+    x = "Hour of Day",
+    y = "Number of Incidents") +
+  scale_x_continuous(breaks = 0:23)
+
+# Percentage breakdown
+time_percent <- data_cleaned %>%
+  group_by(hour) %>%
+  summarise(
+    count = n(),
+    percentage = n() / nrow(data) * 100) %>%
+  arrange(desc(count))
+
+ggplot(time_percent, aes(x=hour, y=percentage)) +
+  geom_bar(stat="identity", fill = "blue", color = "black") +
+  labs(title = "% Distribution of Murders by Hour of Day",
+    x = "Hour of Day",
+    y = "% of Incidents") +
+  scale_x_continuous(breaks = 0:23)
+
+```
+A histogram of incidents by hour of the day revealed that shootings predominantly occur at night, peaking at 11 PM.
+
+Percentage distribution showed over 20% of shootings happen between 10 PM and 2 AM.
+
+# 5. Analysis 2 - Trend of Shootings Over Time
+
+This analysis seeks to assess the trend in the frequency of shootings over the years.
+
+```{r murders over time}
+
+# Aggregate murders by date
+murder_ts <- data_cleaned %>%
+  group_by(OCCUR_DATE) %>%
+  summarise(daily_murders = n()) %>%
+  arrange(OCCUR_DATE)
+
+# Basic time series modeling
+# install.packages("forecast) if you don't have it installed
+library(forecast)
+
+# Convert to time series object
+ts_murders <- ts(murder_ts$daily_murders, 
+                 start = c(year(min(murder_ts$OCCUR_DATE)), 
+                           month(min(murder_ts$OCCUR_DATE))),
+                 frequency = 365)
+
+# Decompose time series
+decompose_murders <- decompose(ts_murders)
+
+# Plot decomposition
+plot(decompose_murders)
+
+```
+
+Visually, we can see that the number of cases fell from 2006 - 2019, before picking up in 2020. Of the decompositions here, the seasonal component and the overall trend seem the most interesting to me.
+
+```{r seasonal analysis}
+
+# seasonal decomposition
+seasonal_component <- decompose_murders$seasonal
+
+start_year <- 2019  # Adjust to reduce time period for better visualisation
+end_year <- 2022
+seasonal_subset <- window(seasonal_component, start = c(start_year, 1), end = c(end_year, 12))
+
+# Create a dataframe for seasonal plot
+seasonal_df <- data.frame(
+  time = time(seasonal_subset),
+  seasonal = as.numeric(seasonal_subset)
+)
+
+# Plot with quarters
+ggplot(seasonal_df, aes(x = time, y = seasonal)) +
+  geom_line(color = "blue") +
+  scale_x_continuous(
+    breaks = seq(min(seasonal_df$time), max(seasonal_df$time), by = 1/4),
+    labels = function(x) {
+      year <- floor(x) %% 100
+      quarter <- paste0("Q", ceiling((x %% 1) * 4) + 1)
+      paste0(year, " ", quarter)
+    }
+  ) +
+  labs(
+    title = "Seasonal Component (3 Years)",
+    x = "Time (Years and Quarters)",
+    y = "Seasonal Effect"
+  ) +
+  theme_minimal()
+```
+A closer look at the seasonality graph shows that shootings tend to happen more frequently between Q2 and Q3, with lower rates between Q4 and Q1.
+
+```{r modelling murders over time}
+
+trend <- decompose_murders$trend
+
+# Simple linear regression
+time_points <- seq_along(trend)  # Time index
+lm_model <- lm(trend ~ time_points, na.action = na.exclude)  # Handle NA in trend
+predicted_values <- predict(lm_model, newdata = data.frame(time_points = time_points))
+
+# Plot the decomposed trend
+plot(trend, type = "l", col = "blue", lwd = 2, main = "Decomposed Trend with Linear Model",
+     xlab = "Time", ylab = "Value")
+
+# Overlay the predicted linear model
+lines(time_points, predicted_values, col = "red", lwd = 2, lty = 2)
+
+```
+
+The model shows that there is a slight negative trend over time, which is statistically significant. However, the low $R^2$ suggests that it only minimally captures the variation in daily murders, and that it is insufficient as a sole predictor. Given the difference between the decomposed trend line (in blue) and the predicted linear model (in red), a linear model is unlikely a suitable model to represent this relationship.
+
+# 6. Conclusion
+
+In conclusion, I think the data has shown:
+1. Nighttime hours, particularly late evenings, see the highest number of shooting incidents.
+2. Shootings happen more frequently in Q2 - Q3, and less in Q4 - Q1
+2. The overall trend of shootings had been declining over the past decade, with a notable uptick in 2020. However, a linear model is not a suitable model to predict future behaviour.
+
+# 7. Reporting of Bias
+
+The analysis avoids cherry-picking timeframes to ensure an unbiased representation of the data.
+Limitations such as missing data and low explanatory power of the linear model are acknowledged.
+
+```{r}
+sessionInfo()
+```

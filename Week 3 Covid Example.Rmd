@@ -1,0 +1,199 @@
+---
+title: "Analysis on the relationship of Population against COVID-19 cases and Deaths
+  in the US by County"
+author: "Mitchell"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Summary
+The analysis shows that the population of US counties have a linear relationship to the number of cases and deaths experienced by that county.
+
+# About the dataset
+The data found in this document comes from the repository for the 2019 Novel Coronavirus Visual Dashboard operated by the Johns Hopkins University Center for Systems Science and Engineering (JHU CSSE). The data extracted describes the total cases and deaths in the US, split by states & counties, updated daily.
+
+# Data Preparation
+First, we will start by importing some useful packages.
+
+```{r import libraries}
+library(tidyverse)
+library(ggplot2)
+```
+
+Start by reading the data from the 2 CSV files, relating to the US cases.
+
+```{r get_jhu_data}
+## Get current data in 2 files, they start the same way
+url_in <- 
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names<-
+  c("time_series_covid19_confirmed_US.csv", "time_series_covid19_deaths_US.csv")
+urls <- str_c(url_in, file_names)
+```
+
+Let's read in the data and see what we have.
+
+```{r import_data, message = FALSE}
+US_cases <- read_csv(urls[1])
+US_deaths <- read_csv(urls[2])
+```
+
+Now, time to tidy up the datasets. I decided that I didn't need the iso codes, FIPS, code3, or Country_Region, as the analysis was all US based.
+I was not intending to analyse Lat/Long data, so I removed that.
+Finally, I removed all the dates except for the last available date (3/9/2023), to get the final number of COVID cases & COVID deaths before the dataset had stopped updating.
+
+```{r tidy_US_data}
+US_cases <- US_cases %>%
+  select(c(UID,Admin2,Province_State,Combined_Key,'3/9/23'))
+
+colnames(US_cases)[5] <- "cases"
+
+US_deaths <- US_deaths %>%
+  select(c(UID,Admin2,Province_State,Combined_Key,Population,'3/9/23'))
+
+colnames(US_deaths)[6] <- "deaths"
+
+US_county_data <- left_join(US_cases,US_deaths,by = c("UID", "Admin2",
+                                                      "Province_State","Combined_Key"))
+```
+
+# Data Summary
+Having grouped all of the county data together, let us see a quick summary of the data at hand.
+
+```{r summary US data}
+summary(US_county_data)
+```
+
+# Top 10 counties in cases and deaths
+Now, we will take a look at the top 10 counties in terms of cases & deaths and their relative population sizes.
+```{r Top 10 counties for cases and deaths}
+US_county_data <- US_county_data %>%
+  mutate(population_rank = dense_rank(desc(Population)))
+
+US_county_data %>%
+  top_n(10, cases) %>% # Select top 10 counties by cases
+  ggplot(aes(x = reorder(Combined_Key, cases), y = cases, fill = Province_State)) +
+  geom_col() +
+  geom_text(aes(label = paste0("Rank: ", population_rank)), # Add rank as labels
+            hjust = -0.2, # Position text slightly outside the bars
+            size = 3) +   # Adjust text size
+  coord_flip() + # Flip coordinates for better readability
+  labs(
+    title = "Top 10 Counties by COVID-19 Cases",
+    x = "County",
+    y = "Number of Cases",
+    fill = "State"
+  ) +
+  theme_minimal()
+
+US_county_data %>%
+  top_n(10, cases) %>% # Select top 10 counties by cases
+  ggplot(aes(x = reorder(Combined_Key, cases), y = cases, fill = Province_State)) +
+  geom_col() +
+  geom_text(aes(label = paste0("Rank: ", population_rank)), # Add rank as labels
+            hjust = -0.2, # Position text slightly outside the bars
+            size = 3) +   # Adjust text size
+  coord_flip() + # Flip coordinates for better readability
+  labs(
+    title = "Top 10 Counties by COVID-19 Deaths",
+    x = "County",
+    y = "Number of Deaths",
+    fill = "State"
+  ) +
+  theme_minimal()
+
+```
+
+At the top end, it looks very much like the counties with the highest population have the most cases and deaths.
+
+# Scatter plot of all counties
+To help us better understand everything, perhaps a scatterplot visualisation of all counties may be helpful.
+
+```{r scatterplot of all the counties}
+
+ggplot(data = US_county_data, aes(x = Population,y = cases)) +
+  geom_point(alpha = 0.7) +
+  scale_size(range = c(2, 10)) +
+  labs(
+    title = "COVID-19 Cases and Population by County",
+    x = "Population",
+    y = "Number of Cases",
+  ) +
+  theme_minimal()
+
+ggplot(data = US_county_data, aes(x = Population,y = deaths)) +
+  geom_point(alpha = 0.7) +
+  scale_size(range = c(2, 10)) +
+  labs(
+    title = "COVID-19 Deaths and Population by County",
+    x = "Population",
+    y = "Number of Deaths",
+  ) +
+  theme_minimal()
+
+```
+
+It does look like there is a strong linear relationship between a county's population and its case volume.
+There also seems to be a linear relationship between a county's population and it's death toll, though visually it does seem less strong.
+
+# Linear Modelling of Population against cases & deaths
+Let us see how appropriate a linear model is for explaining the relationship between population and cases or deaths.
+
+```{r linear modelling analysis for cases}
+
+# Linear model: Population vs Cases
+lm_cases <- lm(cases ~ Population, data = US_county_data)
+
+# Summary of the linear model for cases
+summary(lm_cases)
+
+# Scatter plot for cases
+ggplot(US_county_data, aes(x = Population, y = cases)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "blue") +
+  labs(title = "Population vs Cases",
+       x = "Population",
+       y = "Number of Cases") +
+  theme_minimal()
+
+qqnorm(residuals(lm_cases))      # Generate the Q-Q plot
+qqline(residuals(lm_cases), col = "blue")  # Add a reference line
+
+```
+
+```{r linear modelling analysis for deaths}
+# Linear model: Population vs Deaths
+lm_deaths <- lm(deaths ~ Population, data = US_county_data)
+
+# Summary of the linear model for deaths
+summary(lm_deaths)
+
+# Scatter plot for deaths
+ggplot(US_county_data, aes(x = Population, y = deaths)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  labs(title = "Population vs Deaths",
+       x = "Population",
+       y = "Number of Deaths") +
+  theme_minimal()
+
+qqnorm(residuals(lm_deaths))      # Generate the Q-Q plot
+qqline(residuals(lm_deaths), col = "red")  # Add a reference line
+
+```
+
+Based on the extremely high R^2 and extremely small p value, population is an extremely strong predictor of cases and deaths.
+Furthermore, the factors are likely to be linearly related, though review of the q-q plot shows that the underlying data has more extreme values than expected, implying significant violations of normality in the base dataset itself.
+
+# Conclusion
+Based on the analysis performed above, the relationship between populations and cases/deaths is likely linear. However, the normality violations indicated by the Q-Q plot suggest that the model assumptions might be compromised, especially for inference.
+
+# Biases
+My primary bias is that I expected some sort of relationship between population and cases/deaths, and attempted to mitigate it by going a step further to review the q-q plot of the data after finding such a good fit in the linear model. To my surprise there seems to be some violations, which may imply a different relationship rather than just a linear one.
+
+```{r session info}
+sessionInfo()
+```
+
